@@ -4,11 +4,15 @@ from concurrent.futures import ThreadPoolExecutor
 from pyrogram import Client, filters, enums
 
 # Telegram bot setup
-api_id = "14370420"
-api_hash = "766ebcdc81cce588e5a86b369f4d3420"
-bot_token = '5319082339:AAFt6mb_TMKCDzMbWFmpTgJIog2B0kYH1ss'
-
+api_id = "YOUR_API_ID_HERE"
+api_hash = "YOUR_API_HASH_HERE"
+bot_token = 'YOUR_BOT_TOKEN_HERE'
 app = Client("websitecheckbot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
+
+def country_code_to_emoji(country_code):
+    if len(country_code) != 2:
+        return country_code
+    return chr(0x1F1E6 + (ord(country_code.upper()[0]) - ord('A'))) + chr(0x1F1E6 + (ord(country_code.upper()[1]) - ord('A')))
 
 def check_website_info(url):
     # Ensure the URL starts with 'https://' if it's not already present
@@ -33,32 +37,51 @@ def check_website_info(url):
     # Check for payment gateways
     payment_gateways = [gateway for gateway in payment_gateways_list if gateway.lower() in response.text.lower()]
 
-    # Captcha detection (example logic)
+    # Captcha detection
     captcha_detected = "Captcha" in response.text
 
-    # Check for Cloudflare (example logic)
+    # Check for Cloudflare
     cloudflare_detected = "Cloudflare" in response.text
 
-    # IP Address and ISP retrieval
-    ip_info = requests.get('https://api.ipify.org?format=json').json()
-    ip_address = ip_info['ip']
-    isp_info = "SingleHop LLC"  # Replace with actual API call if needed
+    # IP Address and ISP retrieval using nslookup.io
+    api_method = "https://www.nslookup.io/api/v1/records"
+    payload = {
+        'dnsServer': 'cloudflare',
+        'domain': url.replace('https://', '').replace('http://', '')
+    }
+    try:
+        ip_response = requests.post(api_method, json=payload)
+        ip_info = ip_response.json()
+
+        # Check if 'a' record is present and if 'answer' exists
+        if "a" in ip_info.get("records", {}) and "response" in ip_info["records"]["a"]:
+            ip_info_first_answer = ip_info["records"]["a"]["response"]["answer"][0].get("ipInfo", {})
+        else:
+            return f"Error: No 'a' record or response in IP info for {url}"
+
+    except Exception as e:
+        return f"Error fetching IP info: {e}"
+
+    country_code = ip_info_first_answer.get("countryCode", "Unknown")
+    country_emoji = country_code_to_emoji(country_code)
+
+    # Define a comprehensive list of keywords for platform detection
+    platform_keywords = ['lit', 'gin', 'react', 'angular', 'django', 'flask', 'vue', 'node']
+    platforms = [keyword for keyword in platform_keywords if keyword in response.text.lower()]
+    platform_info = ', '.join(platforms) if platforms else 'Unknown'
 
     # Output results
     output = f"""
 🌐 Website Information 🌐
-
 📍 Site URL: {url}
 🔎 HTTP Status: {http_status} {'OK' if http_status == 200 else 'Error'}
 💳 Payment Gateway: {', '.join(payment_gateways) if payment_gateways else 'None'}
-
 🔒 Captcha: {'Captcha Detected ❌' if captcha_detected else 'No Captcha Detected ✅'}
 ☁️ Cloudflare: {'Yes ❌' if cloudflare_detected else 'No ✅'}
 🔍 GraphQL: {'Yes' if 'graphql' in response.text.lower() else 'No'}
-🔧 Platform: {'Lit, Gin' if 'lit' in response.text.lower() or 'gin' in response.text.lower() else 'Unknown'}
-🌍 Country: The Netherlands 🇳🇱
-🌐 IP Address: {ip_address}
-🔗 ISP: {isp_info}
+🔧 Platform: {platform_info}
+🌍 Country: {ip_info_first_answer.get("country", "Unknown")} {country_emoji}
+🌐 IP Address: {ip_info_first_answer.get("query", "Unknown")}
 """
     return output
 
