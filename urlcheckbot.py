@@ -1,6 +1,6 @@
 import requests
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pyrogram import Client, filters, enums
 
 # Telegram bot setup
@@ -15,18 +15,22 @@ def country_code_to_emoji(country_code):
     return chr(0x1F1E6 + (ord(country_code.upper()[0]) - ord('A'))) + chr(0x1F1E6 + (ord(country_code.upper()[1]) - ord('A')))
 
 def check_website_info(url):
-    # Ensure the URL starts with 'https://' if it's not already present
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
 
-    # Check HTTP status
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         http_status = response.status_code
-    except Exception as e:
+    except requests.exceptions.Timeout:
+        return f"Error: Timeout while trying to connect to {url}"
+    except requests.exceptions.RequestException as e:
         return f"Error fetching URL: {e}"
 
-    # Define the list of payment gateways
+    try:
+        page_text = response.text
+    except Exception as e:
+        return f"Error reading content from {url}: {e}"
+
     payment_gateways_list = [
         "Adyen", "Airwalletx", "Authorize", "Bluesnap", "Braintree", "Checkout",
         "Computop", "Endurance", "Fansly", "Mercadopago", "Ncrsecurepay", "Nordvpn",
@@ -34,81 +38,72 @@ def check_website_info(url):
         "Securepay", "Squareup", "Stripe", "Tebex", "Xendit", "Xsolla"
     ]
 
-    # Check for payment gateways
-    payment_gateways = [gateway for gateway in payment_gateways_list if gateway.lower() in response.text.lower()]
+    try:
+        payment_gateways = [gateway for gateway in payment_gateways_list if gateway.lower() in page_text.lower()]
+    except Exception as e:
+        payment_gateways = []
+        print(f"Error searching for payment gateways on {url}: {e}")
 
-    # Captcha detection
-    captcha_detected = "Captcha" in response.text
+    captcha_detected = "Captcha" in page_text
+    cloudflare_detected = "Cloudflare" in page_text
 
-    # Check for Cloudflare
-    cloudflare_detected = "Cloudflare" in response.text
-
-    # IP Address and ISP retrieval using nslookup.io
     api_method = "https://www.nslookup.io/api/v1/records"
     payload = {
         'dnsServer': 'cloudflare',
         'domain': url.replace('https://', '').replace('http://', '')
     }
     try:
-        ip_response = requests.post(api_method, json=payload)
+        ip_response = requests.post(api_method, json=payload, timeout=10)
         ip_info = ip_response.json()
 
-        # Check if 'a' record is present and if 'answer' exists
         if "a" in ip_info.get("records", {}) and "response" in ip_info["records"]["a"]:
             ip_info_first_answer = ip_info["records"]["a"]["response"]["answer"][0].get("ipInfo", {})
         else:
             return f"Error: No 'a' record or response in IP info for {url}"
 
+    except requests.exceptions.Timeout:
+        return f"Error: Timeout while trying to retrieve IP info for {url}"
     except Exception as e:
         return f"Error fetching IP info: {e}"
 
-    country_code = ip_info_first_answer.get("countryCode", "Unknown")
+    country_code = ip_info_first_answer.get("countryCode", "N/A")
     country_emoji = country_code_to_emoji(country_code)
+    isp_name = ip_info_first_answer.get("asname", "N/A")
 
-    # Define a comprehensive list of keywords for platform detection
     platform_keywords = ['lit', 'gin', 'react', 'angular', 'django', 'flask', 'vue', 'node']
-    platforms = [keyword for keyword in platform_keywords if keyword in response.text.lower()]
-    platform_info = ', '.join(platforms) if platforms else 'Unknown'
+    try:
+        platforms = [keyword for keyword in platform_keywords if keyword in page_text.lower()]
+        platform_info = ', '.join(platforms) if platforms else 'N/A'
+    except Exception as e:
+        platform_info = 'N/A'
+        print(f"Error detecting platforms for {url}: {e}")
 
-    # Output results
-    output = f"""
-🌐 Website Information 🌐
-📍 Site URL: {url}
-🔎 HTTP Status: {http_status} {'OK' if http_status == 200 else 'Error'}
-💳 Payment Gateway: {', '.join(payment_gateways) if payment_gateways else 'None'}
-🔒 Captcha: {'Captcha Detected ❌' if captcha_detected else 'No Captcha Detected ✅'}
-☁️ Cloudflare: {'Yes ❌' if cloudflare_detected else 'No ✅'}
-🔍 GraphQL: {'Yes' if 'graphql' in response.text.lower() else 'No'}
-🔧 Platform: {platform_info}
-🌍 Country: {ip_info_first_answer.get("country", "Unknown")} {country_emoji}
-🌐 IP Address: {ip_info_first_answer.get("query", "Unknown")}
-"""
+    output = f"🌐 Website Information 🌐\n📍 Site URL: {url}\n🔎 HTTP Status: {http_status} {'OK' if http_status == 200 else 'Error'}\n💳 Payment Gateway: {', '.join(payment_gateways) if payment_gateways else 'None'}\n🔒 Captcha: {'Captcha Detected ❌' if captcha_detected else 'No Captcha Detected ✅'}\n☁️ Cloudflare: {'Yes ❌' if cloudflare_detected else 'No ✅'}\n🔍 GraphQL: {'Yes' if 'graphql' in page_text.lower() else 'No'}\n🔧 Platform: {platform_info}\n🌍 Location: {ip_info_first_answer.get('city', 'N/A')}, {ip_info_first_answer.get('regionName', 'N/A')}, {ip_info_first_answer.get('country', 'N/A')} {country_emoji}\n🌐 IP Address: {ip_info_first_answer.get('query', 'N/A')}\n🔗 ISP: {isp_name}\n"
+    
     return output
 
 @app.on_message(filters.command("url"))
 async def handle_url(client, message):
     try:
-        # Extract URLs from the message and replace commas with spaces
-        urls = [url.strip() for url in message.text.replace(',', ' ').split()[1:] if url.strip()]  # URLs start from the second word
+        urls = [url.strip() for url in message.text.replace(',', ' ').split()[1:] if url.strip()]
         if not urls:
             await message.reply_text("⚠️ Please provide URLs in the format: `/url <url1> <url2> ...`", parse_mode=enums.ParseMode.HTML)
             return
 
         processing_message = await message.reply_text("🔍 Processing URLs...", reply_to_message_id=message.id)
 
-        # Use ThreadPoolExecutor to handle concurrent requests
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(check_website_info, url): url for url in urls}
             results = []
-            for future in futures:
+            for future in as_completed(futures):
+                url = futures[future]
                 try:
                     result = future.result()
                     results.append(result)
                 except Exception as e:
-                    results.append(f"Error processing {futures[future]}: {e}")
-                time.sleep(1)  # Optional: Add a delay between requests
+                    results.append(f"Error processing {url}: {e}")
+                time.sleep(1)
 
-        # Send results back via Telegram
         await processing_message.edit_text("\n\n".join(results), parse_mode=enums.ParseMode.HTML)
 
     except Exception as e:
