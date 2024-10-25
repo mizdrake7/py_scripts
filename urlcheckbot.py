@@ -66,9 +66,17 @@ def check_website_info(url):
     except Exception as e:
         return f"Error fetching IP info: {e}"
 
-    country_code = ip_info_first_answer.get("countryCode", "N/A")
-    country_emoji = country_code_to_emoji(country_code)
     isp_name = ip_info_first_answer.get("asname", "N/A")
+
+    # Location details
+    location_city = ip_info_first_answer.get("city", "N/A")
+    location_region = ip_info_first_answer.get("regionName", "N/A")
+    location_country = ip_info_first_answer.get("country", "N/A")
+
+    if location_city == "N/A" and location_region == "N/A" and location_country == "N/A":
+        location_output = "N/A"
+    else:
+        location_output = f"{location_city}, {location_region}, {location_country}"
 
     platform_keywords = ['lit', 'gin', 'react', 'angular', 'django', 'flask', 'vue', 'node']
     try:
@@ -78,9 +86,22 @@ def check_website_info(url):
         platform_info = 'N/A'
         print(f"Error detecting platforms for {url}: {e}")
 
-    output = f"🌐 Website Information 🌐\n📍 Site URL: {url}\n🔎 HTTP Status: {http_status} {'OK' if http_status == 200 else 'Error'}\n💳 Payment Gateway: {', '.join(payment_gateways) if payment_gateways else 'None'}\n🔒 Captcha: {'Captcha Detected ❌' if captcha_detected else 'No Captcha Detected ✅'}\n☁️ Cloudflare: {'Yes ❌' if cloudflare_detected else 'No ✅'}\n🔍 GraphQL: {'Yes' if 'graphql' in page_text.lower() else 'No'}\n🔧 Platform: {platform_info}\n🌍 Location: {ip_info_first_answer.get('city', 'N/A')}, {ip_info_first_answer.get('regionName', 'N/A')}, {ip_info_first_answer.get('country', 'N/A')} {country_emoji}\n🌐 IP Address: {ip_info_first_answer.get('query', 'N/A')}\n🔗 ISP: {isp_name}\n"
-    
-    return output
+    # Output results
+    output = f"""
+<b>🌐 Website Information 🌐</b>
+📍 Site URL: <code>{url}</code>
+🔎 HTTP Status: <code>{http_status} {'OK' if http_status == 200 else 'Error'}</code>
+💳 Payment Gateway: <code>{', '.join(payment_gateways) if payment_gateways else 'None'}</code>
+🔒 Captcha: <code>{'Captcha Detected ❌' if captcha_detected else 'No Captcha Detected ✅'}</code>
+☁️ Cloudflare: <code>{'Yes ❌' if cloudflare_detected else 'No ✅'}</code>
+🔍 GraphQL: <code>{'Yes' if 'graphql' in page_text.lower() else 'No'}</code>
+🔧 Platform: <code>{platform_info}</code>
+🌍 Location: <code>{location_output}</code>
+🌐 IP Address: <code>{ip_info_first_answer.get("query", "N/A")}</code>
+🔗 ISP: <code>{isp_name}</code>
+"""
+
+    return output.strip()  # Remove leading/trailing whitespace
 
 @app.on_message(filters.command("url"))
 async def handle_url(client, message):
