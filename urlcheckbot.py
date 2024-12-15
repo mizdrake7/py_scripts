@@ -208,10 +208,12 @@ def check_website_info(url):
 
 @app.on_message(filters.command("url"))
 async def handle_url(client, message):
-    user_id = message.from_user.id
+    # Use `message.from_user.id` if available, else use `message.chat.id`
+    user_id = message.from_user.id if message.from_user else message.chat.id
+
     if len(message.command) == 1:  # User called "/url" with no URLs
         pending_users[user_id] = True
-        await message.reply_text("\ud83d\udd0d ⚠️ Please provide atleast one URL.", reply_to_message_id=message.id)
+        await message.reply_text("\ud83d\udd0d ⚠️ Please provide at least one URL.", reply_to_message_id=message.id)
     else:
         urls = [url.strip() for url in re.split(r'[\s,]+', message.text.split(' ', 1)[1]) if url.strip()]
 
@@ -251,11 +253,57 @@ async def handle_url(client, message):
 
 @app.on_message(filters.text)
 async def handle_user_input(client, message):
-    user_id = message.from_user.id
+    user_id = message.from_user.id if message.from_user else message.chat.id
+
     if user_id in pending_users:
-        pending_users.pop(user_id)  # Remove user from pending list after they reply with URLs
+        pending_users.pop(user_id)
         urls = [url.strip() for url in re.split(r'[\s,]+', message.text) if url.strip()]
-        
+
+        valid_urls = []
+        invalid_urls = []
+
+        for url in urls:
+            if not is_valid_url(url):
+                url = f"https://{url}"
+            if is_valid_url(url):
+                valid_urls.append(url)
+            else:
+                invalid_urls.append(url)
+
+        if invalid_urls:
+            await message.reply_text(f"\u26a0\ufe0f The following URLs are invalid: {', '.join(invalid_urls)}", parse_mode=enums.ParseMode.HTML)
+
+        if not valid_urls:
+            await message.reply_text("\u26a0\ufe0f No valid URLs provided.", parse_mode=enums.ParseMode.HTML)
+            return
+
+        processing_message = await message.reply_text("\ud83d\udd0d Processing URLs...", reply_to_message_id=message.id)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(check_website_info, url): url for url in valid_urls}
+            results = []
+            for future in as_completed(futures):
+                url = futures[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    results.append(f"Error processing {url}: {e}")
+                time.sleep(1)
+
+        await processing_message.edit_text("\n\n".join(results), parse_mode=enums.ParseMode.HTML)
+
+@app.on_message(filters.text)
+async def handle_user_input(client, message):
+    if message.from_user:
+        user_id = message.from_user.id
+    else:
+        user_id = message.chat.id
+
+    if user_id in pending_users:
+        pending_users.pop(user_id)
+        urls = [url.strip() for url in re.split(r'[\s,]+', message.text) if url.strip()]
+
         valid_urls = []
         invalid_urls = []
 
