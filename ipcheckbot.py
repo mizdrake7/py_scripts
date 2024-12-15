@@ -1,13 +1,18 @@
 from pyrogram import Client, filters, enums
+import subprocess
+import re
 import requests
 from bs4 import BeautifulSoup
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+# API credentials
 api_id = "YOUR_API_ID_HERE"
 api_hash = "YOUR_API_HASH_HERE"
 bot_token = 'YOUR_BOT_TOKEN_HERE'
 
 app = Client("ipcheckbot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
+
+# Dictionary to keep track of pending users
+pending_users = {}
 
 def escape_html(text: str) -> str:
     escape_chars = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
@@ -68,7 +73,7 @@ Organization: <code>{escape_html(details.get('Organization Name', 'n/a'))}</code
 Connection Type: <code>{escape_html(details.get('Connection type', 'n/a'))}</code>
 
 <b>🌍 Location:</b>
-Country: <code>{escape_html(location_info['Country'])}</code>
+Country: <code>{escape_html(location_info['Country'])} 🇮🇳</code>
 State: <code>{escape_html(location_info['State'])}</code>
 City: <code>{escape_html(location_info['City'])}</code>
 Postal Code: <code>{escape_html(location_info['Postal Code'])}</code>
@@ -80,31 +85,74 @@ Tor Exit: <code>{escape_html(proxies['Tor Exit'])}</code>
 Public Proxy: <code>{escape_html(proxies['Public Proxy'])}</code>
 Web Proxy: <code>{escape_html(proxies['Web Proxy'])}</code>
 Search Engine Bot: <code>{escape_html(proxies['Search Engine Bot'])}</code>
+
+<b>⚡ Ping Info:</b>
+Ping: {await check_ping(ip)}
     """
     return message
 
+async def check_ping(ip: str) -> str:
+    try:
+        response = subprocess.run(
+            ["ping", "-c", "1", "-W", "5", ip],  # '-W 5' sets timeout to 5 seconds
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
+        match = re.search(r'time=(\d+\.\d+) ms', response.stdout)
+        if match:
+            return f"{match.group(1)} ms"
+        else:
+            return "Timeout"
+    except Exception as e:
+        return "Timeout"
+
 @app.on_message(filters.command("ip"))
 async def handle_ip(client, message):
-    input_text = message.text.split(maxsplit=1)
-    if len(input_text) < 2:
-        await message.reply_text("⚠️ Please provide at least one IP in the format: `/ip <ip1>, <ip2>, ...`", parse_mode=enums.ParseMode.HTML)
-        return
-    
-    ip_input = input_text[1]
-    ip_list = [ip.strip() for ip in ip_input.replace(',', ' ').split() if ip.strip()]
+    if message.from_user:
+        user_id = message.from_user.id
+    else:
+        user_id = message.chat.id
 
-    if not ip_list:
-        await message.reply_text("⚠️ No valid IPs provided.", parse_mode=enums.ParseMode.HTML)
-        return
+    if len(message.command) == 1:
+        pending_users[user_id] = True
+        await message.reply_text("⚠️ Please provide at least one IP address.")
+    else:
+        ip_input = message.text.split(maxsplit=1)[1]
+        ip_list = [ip.strip() for ip in ip_input.replace(',', ' ').split() if ip.strip()]
 
-    processing_message = await message.reply_text("🔍 Processing IP details...", reply_to_message_id=message.id)
-    results = ""
+        if ip_list:
+            processing_message = await message.reply_text("🔍 Processing IP details...", reply_to_message_id=message.id)
+            results = ""
+            for ip in ip_list:
+                ip_details = await fetch_ip_details(ip)
+                results += ip_details + "\n\n"
+            await processing_message.edit_text(results.strip(), parse_mode=enums.ParseMode.HTML)
+        else:
+            await message.reply_text("⚠️ Invalid IPs provided. IPs separated by spaces or commas.")
 
-    for ip in ip_list:
-        ip_details = await fetch_ip_details(ip)
-        results += ip_details + "\n\n"
+@app.on_message(filters.text & filters.private)
+async def handle_responses(client, message):
+    if message.from_user:
+        user_id = message.from_user.id
+    else:
+        user_id = message.chat.id
 
-    await processing_message.edit_text(results.strip(), parse_mode=enums.ParseMode.HTML)
+    if user_id in pending_users:
+        del pending_users[user_id]
+        ip_input = message.text
+        ip_list = [ip.strip() for ip in ip_input.replace(',', ' ').split() if ip.strip()]
+
+        if ip_list:
+            processing_message = await message.reply_text("🔍 Processing IP details...", reply_to_message_id=message.id)
+            results = ""
+            for ip in ip_list:
+                ip_details = await fetch_ip_details(ip)
+                results += ip_details + "\n\n"
+            await processing_message.edit_text(results.strip(), parse_mode=enums.ParseMode.HTML)
+        else:
+            await message.reply_text("⚠️ Invalid IPs provided. IPs separated by spaces or commas.")
 
 print("Bot is running...")
 app.run()
