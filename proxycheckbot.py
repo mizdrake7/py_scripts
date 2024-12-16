@@ -44,8 +44,8 @@ def check_proxy(proxy):
     
     return f"**[🔴 DEAD] `{proxy.strip()}`**"
 
-# Handle the /prxy command and accept proxy inputs directly
-@app.on_message(filters.command("prxy"))
+# Handle the /prxy command
+@app.on_message(filters.command("prxy") & filters.private)
 async def handle_prxy(client, message: Message):
     if len(message.command) > 1:
         # Check if proxies are provided directly after the command
@@ -129,51 +129,11 @@ async def handle_file_input(client, message: Message):
         else:
             await message.reply_text("⚠️ No valid proxies found in the file. Please check your file format.")
 
-# Handle text input as well
-@app.on_message(filters.private)
-async def handle_text_input(client, message: Message):
-    if message.text and not message.document:
-        proxies_input = message.text.strip()
-
-        if proxies_input:
-            proxies = [proxy.strip() for proxy in proxies_input.splitlines() if proxy.strip()]
-
-            if proxies:
-                processing_message = await message.reply_text("🔍 Processing proxies...", reply_to_message_id=message.id)
-
-                results = []
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    futures = {executor.submit(check_proxy, proxy): proxy for proxy in proxies}
-                    for future in as_completed(futures):
-                        result = future.result()
-                        results.append(result)
-
-                live_proxies = [result for result in results if result.startswith("**[🟢 LIVE]")]
-                dead_proxies = [result for result in results if result.startswith("**[🔴 DEAD]")]
-
-                output = f"**Proxy Check Complete**\n\n"
-                output += f"**Total Proxies:** {len(proxies)}\n"
-                output += f"**Live Proxies:** {len(live_proxies)}\n"
-                output += f"**Dead Proxies:** {len(dead_proxies)}\n\n"
-
-                if live_proxies:
-                    output += "**Live Proxies:**\n" + "\n".join(live_proxies) + "\n"
-                if dead_proxies:
-                    output += "**Dead Proxies:**\n" + "\n".join(dead_proxies)
-
-                await processing_message.edit_text(output, parse_mode=enums.ParseMode.MARKDOWN)
-            else:
-                await message.reply_text(
-                    "⚠️ Please provide proxies in the format `ip:port:username:password`. You can also send a proxy list text file.",
-                    reply_to_message_id=message.id,
-                    parse_mode=enums.ParseMode.MARKDOWN
-                )
-        else:
-            await message.reply_text(
-                "⚠️ Please provide proxies in the format `ip:port:username:password`. You can also send a proxy list text file.",
-                reply_to_message_id=message.id,
-                parse_mode=enums.ParseMode.MARKDOWN
-            )
+# Add a default filter to ignore unrelated messages
+@app.on_message(filters.private & ~filters.command(["prxy"]) & ~filters.document)
+async def ignore_other_messages(client, message: Message):
+    # Do nothing, ensuring the bot remains silent for unrelated inputs
+    pass
 
 print("Bot is running...")
 app.run()
