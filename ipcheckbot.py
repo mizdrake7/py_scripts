@@ -3,6 +3,7 @@ import subprocess
 import re
 import requests
 from bs4 import BeautifulSoup
+import pycountry
 
 # API credentials
 api_id = "YOUR_API_ID_HERE"
@@ -19,6 +20,18 @@ def escape_html(text: str) -> str:
     for char, replacement in escape_chars.items():
         text = text.replace(char, replacement)
     return text
+
+def country_to_flag(country_name: str) -> str:
+    try:
+        country = pycountry.countries.get(name=country_name)
+        if not country:
+            country = pycountry.countries.get(common_name=country_name)
+        if not country:
+            return "🏳"  # Default to a white flag if no match is found
+        country_code = country.alpha_2
+        return ''.join(chr(127397 + ord(c)) for c in country_code.upper())
+    except Exception:
+        return "🏳"  # Default flag in case of any errors
 
 async def fetch_ip_details(ip: str) -> str:
     ipurl = f"https://scamalytics.com/ip/{ip}"
@@ -52,13 +65,8 @@ async def fetch_ip_details(ip: str) -> str:
         "Longitude": details.get("Longitude", "n/a"),
     }
 
-    proxies = {
-        "Anonymizing VPN": details.get("Anonymizing VPN", "n/a"),
-        "Tor Exit": details.get("Tor Exit Node", "n/a"),
-        "Public Proxy": details.get("Public Proxy", "n/a"),
-        "Web Proxy": details.get("Web Proxy", "n/a"),
-        "Search Engine Bot": details.get("Search Engine Robot", "n/a"),
-    }
+    country_name = location_info["Country"]
+    country_flag = country_to_flag(country_name)
 
     message = f"""
 <b>📊 IP Fraud Risk Report for {escape_html(ip)}</b>
@@ -73,18 +81,18 @@ Organization: <code>{escape_html(details.get('Organization Name', 'n/a'))}</code
 Connection Type: <code>{escape_html(details.get('Connection type', 'n/a'))}</code>
 
 <b>🌍 Location:</b>
-Country: <code>{escape_html(location_info['Country'])} 🇮🇳</code>
+Country: <code>{escape_html(country_name)} {country_flag}</code>
 State: <code>{escape_html(location_info['State'])}</code>
 City: <code>{escape_html(location_info['City'])}</code>
 Postal Code: <code>{escape_html(location_info['Postal Code'])}</code>
 Coordinates: <code>{escape_html(location_info['Latitude'])}, {escape_html(location_info['Longitude'])}</code>
 
 <b>🔐 Proxies:</b>
-Anonymizing VPN: <code>{escape_html(proxies['Anonymizing VPN'])}</code>
-Tor Exit: <code>{escape_html(proxies['Tor Exit'])}</code>
-Public Proxy: <code>{escape_html(proxies['Public Proxy'])}</code>
-Web Proxy: <code>{escape_html(proxies['Web Proxy'])}</code>
-Search Engine Bot: <code>{escape_html(proxies['Search Engine Bot'])}</code>
+Anonymizing VPN: <code>{escape_html(details.get('Anonymizing VPN', 'n/a'))}</code>
+Tor Exit: <code>{escape_html(details.get('Tor Exit Node', 'n/a'))}</code>
+Public Proxy: <code>{escape_html(details.get('Public Proxy', 'n/a'))}</code>
+Web Proxy: <code>{escape_html(details.get('Web Proxy', 'n/a'))}</code>
+Search Engine Bot: <code>{escape_html(details.get('Search Engine Robot', 'n/a'))}</code>
 
 <b>⚡ Ping Info:</b>
 Ping: {await check_ping(ip)}
@@ -110,13 +118,15 @@ async def check_ping(ip: str) -> str:
 
 @app.on_message(filters.command("ip"))
 async def handle_ip(client, message):
+    # Check if the message is from a user (private or group)
     if message.from_user:
         user_id = message.from_user.id
     else:
+        # If from_user is not available (e.g., in a group), use chat ID
         user_id = message.chat.id
 
-    if len(message.command) == 1:
-        pending_users[user_id] = True
+    if len(message.command) == 1:  # No IPs provided after '/ip'
+        pending_users[user_id] = True  # Mark user as pending
         await message.reply_text("⚠️ Please provide at least one IP address.")
     else:
         ip_input = message.text.split(maxsplit=1)[1]
@@ -134,13 +144,15 @@ async def handle_ip(client, message):
 
 @app.on_message(filters.text & filters.private)
 async def handle_responses(client, message):
+    # Check if the message is from a user (private or group)
     if message.from_user:
         user_id = message.from_user.id
     else:
+        # If from_user is not available (e.g., in a group), use chat ID
         user_id = message.chat.id
 
     if user_id in pending_users:
-        del pending_users[user_id]
+        del pending_users[user_id]  # Remove user from pending list
         ip_input = message.text
         ip_list = [ip.strip() for ip in ip_input.replace(',', ' ').split() if ip.strip()]
 
