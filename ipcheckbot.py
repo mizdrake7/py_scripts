@@ -4,15 +4,15 @@ import re
 import requests
 from bs4 import BeautifulSoup
 import pycountry
+import platform
 
 # API credentials
-api_id = "YOUR_API_ID_HERE"
-api_hash = "YOUR_API_HASH_HERE"
-bot_token = 'YOUR_BOT_TOKEN_HERE'
+api_id = ""
+api_hash = ""
+bot_token = ''
 
 app = Client("ipcheckbot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 
-# Dictionary to keep track of pending users
 pending_users = {}
 
 def escape_html(text: str) -> str:
@@ -27,33 +27,62 @@ def country_to_flag(country_name: str) -> str:
         if not country:
             country = pycountry.countries.get(common_name=country_name)
         if not country:
-            return "🏳"  # Default to a white flag if no match is found
+            return "🏳"
         country_code = country.alpha_2
         return ''.join(chr(127397 + ord(c)) for c in country_code.upper())
     except Exception:
-        return "🏳"  # Default flag in case of any errors
+        return "🏳"
+
+async def check_ping(ip: str) -> str:
+    try:
+        if platform.system().lower() == "windows":
+            cmd = ["ping", "-n", "1", "-w", "5000", ip]
+        else:
+            cmd = ["ping", "-c", "1", "-W", "5", ip]
+
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        match = re.search(r'time[=<]?\s*(\d+\.?\d*)\s*ms', result.stdout)
+        return f"{match.group(1)} ms" if match else "Timeout"
+    except:
+        return "Timeout"
 
 async def fetch_ip_details(ip: str) -> str:
-    ipurl = f"https://scamalytics.com/ip/{ip}"
-    response = requests.get(ipurl)
+    url = f"https://scamalytics.com/ip/{ip}"
+    headers = {"User-Agent": "Mozilla/5.0"}
 
+    response = requests.get(url, headers=headers)
     if response.status_code != 200:
-        return f"Error: Unable to fetch details for IP {ip}. Please check the IP and try again."
+        return f"❌ Error: Could not retrieve data for IP {ip} (Status Code: {response.status_code})"
 
     soup = BeautifulSoup(response.text, 'html.parser')
 
-    score_element = soup.find('div', class_='score')
-    fraud_score = score_element.text.split(': ')[1].strip() if score_element else "n/a"
+    # Fraud score extraction
+    fraud_score = "Not available"
+    score_box = soup.select_one("div.score")
+    if score_box:
+        text = score_box.get_text(strip=True)
+        match = re.search(r"Fraud Score:\s*(\d+)", text)
+        if match:
+            fraud_score = match.group(1)
+        else:
+            print(f"[⚠️ DEBUG] Found score div but couldn't extract number: {text}")
+    else:
+        print("[⚠️ DEBUG] No <div class='score'> found — layout may have changed.")
 
-    risk_element = soup.find('div', class_='panel_title')
-    risk = risk_element.text.strip() if risk_element else "n/a"
+   
+    risk = "n/a"
+    risk_tag = soup.find("div", class_="panel_title")
+    if risk_tag:
+        risk = risk_tag.text.strip()
 
+   
     details = {}
-    for row in soup.select('table tr'):
-        header = row.find('th')
-        if header:
-            key = header.text.strip()
-            value = row.find('td').text.strip() if row.find('td') else "n/a"
+    for row in soup.select("table tr"):
+        th = row.find("th")
+        td = row.find("td")
+        if th and td:
+            key = th.text.strip()
+            value = td.text.strip()
             details[key] = value
 
     location_info = {
@@ -73,7 +102,7 @@ async def fetch_ip_details(ip: str) -> str:
 
 <b>Score</b>: <code>{escape_html(fraud_score)}</code> | <b>Risk</b>: <code>{escape_html(risk)}</code>
 
-<b>Operator Details:</b>
+<b>🌐 Operator Details:</b>
 Hostname: <code>{escape_html(details.get('Hostname', 'n/a'))}</code>
 ASN: <code>{escape_html(details.get('ASN', 'n/a'))}</code>
 ISP: <code>{escape_html(details.get('ISP Name', 'n/a'))}</code>
@@ -87,84 +116,73 @@ City: <code>{escape_html(location_info['City'])}</code>
 Postal Code: <code>{escape_html(location_info['Postal Code'])}</code>
 Coordinates: <code>{escape_html(location_info['Latitude'])}, {escape_html(location_info['Longitude'])}</code>
 
+<b>🏢 Datacenter:</b>
+Datacenter: <code>{escape_html(details.get('Datacenter', 'n/a'))}</code>
+
+<b>🛑 External Blacklists:</b>
+Firehol: <code>{escape_html(details.get('Firehol', 'n/a'))}</code>
+IP2ProxyLite: <code>{escape_html(details.get('IP2ProxyLite', 'n/a'))}</code>
+IPsum: <code>{escape_html(details.get('IPsum', 'n/a'))}</code>
+Spamhaus: <code>{escape_html(details.get('Spamhaus', 'n/a'))}</code>
+X4Bnet Spambot: <code>{escape_html(details.get('X4Bnet Spambot', 'n/a'))}</code>
+
 <b>🔐 Proxies:</b>
 Anonymizing VPN: <code>{escape_html(details.get('Anonymizing VPN', 'n/a'))}</code>
 Tor Exit: <code>{escape_html(details.get('Tor Exit Node', 'n/a'))}</code>
+Server: <code>{escape_html(details.get('Server', 'n/a'))}</code>
 Public Proxy: <code>{escape_html(details.get('Public Proxy', 'n/a'))}</code>
 Web Proxy: <code>{escape_html(details.get('Web Proxy', 'n/a'))}</code>
 Search Engine Bot: <code>{escape_html(details.get('Search Engine Robot', 'n/a'))}</code>
 
 <b>⚡ Ping Info:</b>
 Ping: {await check_ping(ip)}
-    """
+"""
     return message
 
-async def check_ping(ip: str) -> str:
-    try:
-        response = subprocess.run(
-            ["ping", "-c", "1", "-W", "5", ip],  # '-W 5' sets timeout to 5 seconds
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-
-        match = re.search(r'time=(\d+\.\d+) ms', response.stdout)
-        if match:
-            return f"{match.group(1)} ms"
-        else:
-            return "Timeout"
-    except Exception as e:
-        return "Timeout"
-
 @app.on_message(filters.command("ip"))
-async def handle_ip(client, message):
-    # Check if the message is from a user (private or group)
-    if message.from_user:
-        user_id = message.from_user.id
-    else:
-        # If from_user is not available (e.g., in a group), use chat ID
-        user_id = message.chat.id
+async def handle_ip_command(client, message):
+    user_id = message.from_user.id if message.from_user else message.chat.id
 
-    if len(message.command) == 1:  # No IPs provided after '/ip'
-        pending_users[user_id] = True  # Mark user as pending
+    if len(message.command) == 1:
+        pending_users[user_id] = True
         await message.reply_text("⚠️ Please provide at least one IP address.")
-    else:
-        ip_input = message.text.split(maxsplit=1)[1]
-        ip_list = [ip.strip() for ip in ip_input.replace(',', ' ').split() if ip.strip()]
+        return
 
-        if ip_list:
-            processing_message = await message.reply_text("🔍 Processing IP details...", reply_to_message_id=message.id)
-            results = ""
-            for ip in ip_list:
-                ip_details = await fetch_ip_details(ip)
-                results += ip_details + "\n\n"
-            await processing_message.edit_text(results.strip(), parse_mode=enums.ParseMode.HTML)
-        else:
-            await message.reply_text("⚠️ Invalid IPs provided. IPs separated by spaces or commas.")
+    ip_input = message.text.split(maxsplit=1)[1]
+    ip_list = [ip.strip() for ip in ip_input.replace(",", " ").split() if ip.strip()]
+
+    if not ip_list:
+        await message.reply_text("⚠️ Invalid IPs provided. Use space or comma to separate them.")
+        return
+
+    processing = await message.reply_text("🔍 Processing IP details...", reply_to_message_id=message.id)
+    result = ""
+    for ip in ip_list:
+        result += await fetch_ip_details(ip) + "\n\n"
+
+    await processing.edit_text(result.strip(), parse_mode=enums.ParseMode.HTML)
 
 @app.on_message(filters.text & filters.private)
-async def handle_responses(client, message):
-    # Check if the message is from a user (private or group)
-    if message.from_user:
-        user_id = message.from_user.id
-    else:
-        # If from_user is not available (e.g., in a group), use chat ID
-        user_id = message.chat.id
+async def handle_text_response(client, message):
+    user_id = message.from_user.id if message.from_user else message.chat.id
 
-    if user_id in pending_users:
-        del pending_users[user_id]  # Remove user from pending list
-        ip_input = message.text
-        ip_list = [ip.strip() for ip in ip_input.replace(',', ' ').split() if ip.strip()]
+    if user_id not in pending_users:
+        return
 
-        if ip_list:
-            processing_message = await message.reply_text("🔍 Processing IP details...", reply_to_message_id=message.id)
-            results = ""
-            for ip in ip_list:
-                ip_details = await fetch_ip_details(ip)
-                results += ip_details + "\n\n"
-            await processing_message.edit_text(results.strip(), parse_mode=enums.ParseMode.HTML)
-        else:
-            await message.reply_text("⚠️ Invalid IPs provided. IPs separated by spaces or commas.")
+    del pending_users[user_id]
+    ip_input = message.text
+    ip_list = [ip.strip() for ip in ip_input.replace(",", " ").split() if ip.strip()]
+
+    if not ip_list:
+        await message.reply_text("⚠️ Invalid IPs provided. Use space or comma to separate them.")
+        return
+
+    processing = await message.reply_text("🔍 Processing IP details...", reply_to_message_id=message.id)
+    result = ""
+    for ip in ip_list:
+        result += await fetch_ip_details(ip) + "\n\n"
+
+    await processing.edit_text(result.strip(), parse_mode=enums.ParseMode.HTML)
 
 print("Bot is running...")
 app.run()
