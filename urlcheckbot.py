@@ -3,6 +3,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pyrogram import Client, filters, enums
 from urllib.parse import urlparse
+from ping3 import ping
 import re
 
 # API credentials
@@ -122,6 +123,15 @@ def check_website_info(url):
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
 
+    domain = urlparse(url).netloc
+
+    try:
+        latency = ping(domain, timeout=3)
+        ping_info = f"{int(latency * 1000)} ms" if latency else "Unreachable"
+    except Exception as e:
+        ping_info = f"Error: {e}"
+
+
     try:
         response = requests.get(url, timeout=10)
         http_status = response.status_code
@@ -203,6 +213,7 @@ def check_website_info(url):
 🌍 Location: <code>{location_output}</code>
 🖧 IP Address: <code>{ip_info_first_answer.get("query", "N/A")}</code>
 📡 ISP: <code>{isp_name}</code>
+⚡️ Ping Info: <code>{ping_info}</code>
 """
     return output.strip()
 
