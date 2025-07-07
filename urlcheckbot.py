@@ -6,8 +6,9 @@ from urllib.parse import urlparse
 from ping3 import ping
 import re
 import pycountry
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# API credentials
+# Telegram bot credentials
 api_id = "YOUR_API_ID_HERE"
 api_hash = "YOUR_API_HASH_HERE"
 bot_token = 'YOUR_BOT_TOKEN_HERE'
@@ -16,7 +17,6 @@ session_name = f"websitecheckbot_{bot_token.split(':')[0]}"
 app = Client(session_name, api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 pending_users = {}
 
-# ✅ Convert country name to emoji flag
 def country_name_to_emoji(country_name):
     try:
         country = pycountry.countries.lookup(country_name)
@@ -25,12 +25,10 @@ def country_name_to_emoji(country_name):
     except:
         return "🏳️"
 
-# ✅ URL validation
 def is_valid_url(url):
     parsed = urlparse(url)
     return bool(parsed.netloc) and bool(parsed.scheme)
 
-# ✅ Website info checker
 def check_website_info(url):
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
@@ -40,19 +38,19 @@ def check_website_info(url):
     try:
         latency = ping(domain, timeout=3)
         ping_info = f"{int(latency * 1000)} ms" if latency else "Unreachable"
-    except Exception as e:
-        ping_info = f"Error: {e}"
+    except Exception:
+        ping_info = "Unreachable"
 
     try:
         response = requests.get(url, timeout=10)
         http_status = response.status_code
         page_text = response.text
     except requests.exceptions.Timeout:
-        return f"Error: Timeout while trying to connect to {url}"
+        return {"error": f"❌ <b>Timeout</b>: The site <code>{url}</code> didn't respond in time.", "url": url}
     except requests.exceptions.RequestException as e:
-        return f"Error fetching URL: {e}"
+        return {"error": f"❌ <b>Connection Error</b>: Unable to reach <code>{url}</code>\n<code>{str(e)}</code>", "url": url}
     except Exception as e:
-        return f"Error reading content from {url}: {e}"
+        return {"error": f"❌ <b>Error</b>: Couldn't read the response from <code>{url}</code>", "url": url}
 
     PAYMENT_GATEWAYS = {
         "paypal": "PayPal", "stripe": "Stripe", "razorpay": "Razorpay", "paytm": "Paytm",
@@ -69,7 +67,7 @@ def check_website_info(url):
         "bluesnap": "Bluesnap", "checkout": "Checkout", "computop": "Computop", "endurance": "Endurance",
         "fansly": "Fansly", "mercadopago": "MercadoPago", "ncrsecurepay": "NCR SecurePay",
         "nordvpn": "NordVPN", "paddle": "Paddle", "patreon": "Patreon", "pay360": "Pay360",
-        "payzen": "PayZen", "processout": "ProcessOut", "securepay": "SecurePay", 
+        "payzen": "PayZen", "processout": "ProcessOut", "securepay": "SecurePay",
         "squareup": "Squareup", "tebex": "Tebex"
     }
 
@@ -87,13 +85,12 @@ def check_website_info(url):
     platform_keywords = ['lit', 'gin', 'react', 'angular', 'django', 'flask', 'vue', 'node']
     platforms = [keyword for keyword in platform_keywords if keyword in page_text.lower()]
 
-    # IP lookup
     try:
         domain_only = url.replace("https://", "").replace("http://", "")
         ip_response = requests.post("https://www.nslookup.io/api/v1/records", json={'dnsServer': 'cloudflare', 'domain': domain_only}, timeout=10)
         ip_data = ip_response.json().get("records", {}).get("a", {}).get("response", {}).get("answer", [{}])[0].get("ipInfo", {})
     except Exception as e:
-        return f"Error fetching IP info: {e}"
+        return {"error": f"❌ <b>DNS Error</b>: Could not resolve IP info for <code>{url}</code>\n<code>{e}</code>", "url": url}
 
     isp_name = ip_data.get("asname", "N/A")
     ip_query = ip_data.get("query", "N/A")
@@ -103,7 +100,8 @@ def check_website_info(url):
     flag = country_name_to_emoji(country)
     location_output = f"{city}, {region}, {country} {flag}" if country != "N/A" else "N/A"
 
-    return f"""
+    return {
+        "info": f"""
 <b>🌐 Website Information 🌐</b>
 🔗 Site URL: <code>{url}</code>
 🔍 HTTP Status: <code>{http_status} {'OK' if http_status == 200 else 'Error'}</code>
@@ -114,12 +112,13 @@ def check_website_info(url):
 🔎 GraphQL: <code>{graphql_used}</code>
 🔧 Platform: <code>{', '.join(platforms) if platforms else 'N/A'}</code>
 🌍 Location: <code>{location_output}</code>
-🖧 IP Address: <code>{ip_query}</code>
+📧 IP Address: <code>{ip_query}</code>
 📡 ISP: <code>{isp_name}</code>
 ⚡ Ping Info: <code>{ping_info}</code>
-""".strip()
+""".strip(),
+        "url": url
+    }
 
-# ✅ Handle /url command
 @app.on_message(filters.command("url"))
 async def handle_url(client, message):
     user_id = message.from_user.id if message.from_user else message.chat.id
@@ -155,9 +154,22 @@ async def handle_url(client, message):
         results = [future.result() for future in as_completed(futures)]
         time.sleep(1)
 
-    await processing_message.edit_text("\n\n".join(results), parse_mode=enums.ParseMode.HTML)
+    await processing_message.delete()
 
-# ✅ Handle text input after /url
+    for result in results:
+        if "error" in result:
+            await message.reply_text(result["error"], parse_mode=enums.ParseMode.HTML)
+        else:
+            screenshot_url = f"https://image.thum.io/get/width/1000/{result['url']}"
+            buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Open Website", url=result["url"])]])
+            await client.send_photo(
+                chat_id=message.chat.id,
+                photo=screenshot_url,
+                caption=result["info"],
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=buttons
+            )
+
 @app.on_message(filters.text)
 async def handle_user_input(client, message):
     user_id = message.from_user.id if message.from_user else message.chat.id
@@ -177,8 +189,20 @@ async def handle_user_input(client, message):
                 futures = {executor.submit(check_website_info, url): url for url in urls}
                 results = [future.result() for future in as_completed(futures)]
                 time.sleep(1)
-            await processing_message.edit_text("\n\n".join(results), parse_mode=enums.ParseMode.HTML)
+            await processing_message.delete()
+            for result in results:
+                if "error" in result:
+                    await message.reply_text(result["error"], parse_mode=enums.ParseMode.HTML)
+                else:
+                    screenshot_url = f"https://image.thum.io/get/width/1000/{result['url']}"
+                    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("Open Website", url=result["url"])]])
+                    await client.send_photo(
+                        chat_id=message.chat.id,
+                        photo=screenshot_url,
+                        caption=result["info"],
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_markup=buttons
+                    )
 
-# ✅ Start bot
 print("Bot is running...")
 app.run()
