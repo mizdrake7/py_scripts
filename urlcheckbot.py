@@ -1,21 +1,22 @@
-import requests
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pyrogram import Client, filters, enums
+import requests, re, socket, json, whois, time
+from icmplib import ping as icmp_ping
+from datetime import datetime
 from urllib.parse import urlparse
-from ping3 import ping
-import re
-import pycountry
+from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import pycountry
 
-# Telegram bot credentials
 api_id = "YOUR_API_ID_HERE"
 api_hash = "YOUR_API_HASH_HERE"
 bot_token = 'YOUR_BOT_TOKEN_HERE'
 session_name = f"websitecheckbot_{bot_token.split(':')[0]}"
-
 app = Client(session_name, api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 pending_users = {}
+
+def extract_domain(url):
+    parsed_url = urlparse(url)
+    return parsed_url.netloc or parsed_url.path
 
 def country_name_to_emoji(country_name):
     try:
@@ -29,92 +30,109 @@ def is_valid_url(url):
     parsed = urlparse(url)
     return bool(parsed.netloc) and bool(parsed.scheme)
 
+def get_ip_and_location(domain):
+    try:
+        response = requests.get(f"http://nslookup.io/api/ip/{domain}")
+        if response.status_code == 200:
+            data = response.json()
+            ip = data.get("ip", "N/A")
+            isp = data.get("isp", "N/A")
+            location_parts = [data.get("city", ""), data.get("region", ""), data.get("country", "")]
+            location = ", ".join(filter(None, location_parts))
+            flag = data.get("flag", "")
+            return ip, isp, location, flag
+    except:
+        pass
+    return "N/A", "N/A", "N/A", ""
+
+def get_whois_data(domain):
+    try:
+        w = whois.whois(domain)
+        registrar = w.registrar or "N/A"
+        creation = w.creation_date
+        expiry = w.expiration_date
+        if isinstance(creation, list): creation = creation[0]
+        if isinstance(expiry, list): expiry = expiry[0]
+        created = creation.strftime('%Y-%m-%d') if isinstance(creation, datetime) else "N/A"
+        expires = expiry.strftime('%Y-%m-%d') if isinstance(expiry, datetime) else "N/A"
+        return registrar, created, expires
+    except:
+        return "N/A", "N/A", "N/A"
+
+PAYMENT_GATEWAYS = {
+    "paypal": "PayPal", "stripe": "Stripe", "razorpay": "Razorpay", "paytm": "Paytm",
+    "ccavenue": "CCAvenue", "cashfree": "Cashfree", "instamojo": "Instamojo",
+    "braintree": "Braintree", "adyen": "Adyen", "square": "Square", "xendit": "Xendit",
+    "payflow": "Payflow", "authorize.net": "Authorize.net", "recurly": "Recurly",
+    "payu": "PayU", "worldpay": "Worldpay", "mollie": "Mollie", "stripe-checkout": "Stripe Checkout",
+    "2checkout": "2Checkout", "bluepay": "BluePay", "amazon-pay": "Amazon Pay",
+    "apple-pay": "Apple Pay", "google-pay": "Google Pay", "phonepe": "PhonePe",
+    "mobikwik": "Mobikwik", "billdesk": "BillDesk", "atom": "Atom", "bhim": "BHIM",
+    "upi": "UPI", "neteller": "Neteller", "skrill": "Skrill", "payoneer": "Payoneer",
+    "paysera": "Paysera", "sezzle": "Sezzle", "klarna": "Klarna", "afterpay": "Afterpay",
+    "zuora": "Zuora", "xsolla": "Xsolla", "airwalletx": "Airwalletx", "authorize": "Authorize",
+    "bluesnap": "Bluesnap", "checkout": "Checkout", "computop": "Computop", "endurance": "Endurance",
+    "fansly": "Fansly", "mercadopago": "MercadoPago", "ncrsecurepay": "NCR SecurePay",
+    "nordvpn": "NordVPN", "paddle": "Paddle", "patreon": "Patreon", "pay360": "Pay360",
+    "payzen": "PayZen", "processout": "ProcessOut", "securepay": "SecurePay",
+    "squareup": "Squareup", "tebex": "Tebex"
+}
+
+CAPTCHAS = {
+    "recaptcha": "reCAPTCHA", "hcaptcha": "hCAPTCHA",
+    "cloudflare.com/turnstile": "Cloudflare Turnstile", "cloudflare": "Cloudflare"
+}
+
+CMS_SYSTEMS = ["wordpress", "magento", "prestashop", "bigcommerce", "shopify"]
+PLATFORMS = ['lit', 'gin', 'react', 'angular', 'django', 'flask', 'vue', 'node', 'next.js']
+
 def check_website_info(url):
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
 
-    domain = urlparse(url).netloc
+    domain = extract_domain(url)
 
     try:
-        latency = ping(domain, timeout=3)
-        ping_info = f"{int(latency * 1000)} ms" if latency else "Unreachable"
-    except Exception:
-        ping_info = "Unreachable"
-
-    try:
-        response = requests.get(url, timeout=10)
-        http_status = response.status_code
-        page_text = response.text
-    except requests.exceptions.Timeout:
-        return {"error": f"❌ <b>Timeout</b>: The site <code>{url}</code> didn't respond in time.", "url": url}
-    except requests.exceptions.RequestException as e:
-        return {"error": f"❌ <b>Connection Error</b>: Unable to reach <code>{url}</code>\n<code>{str(e)}</code>", "url": url}
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=10)
+        html = response.text
+        status_code = response.status_code
     except Exception as e:
-        return {"error": f"❌ <b>Error</b>: Couldn't read the response from <code>{url}</code>", "url": url}
-
-    PAYMENT_GATEWAYS = {
-        "paypal": "PayPal", "stripe": "Stripe", "razorpay": "Razorpay", "paytm": "Paytm",
-        "ccavenue": "CCAvenue", "cashfree": "Cashfree", "instamojo": "Instamojo",
-        "braintree": "Braintree", "adyen": "Adyen", "square": "Square", "xendit": "Xendit",
-        "payflow": "Payflow", "authorize.net": "Authorize.net", "recurly": "Recurly",
-        "payu": "PayU", "worldpay": "Worldpay", "mollie": "Mollie", "stripe-checkout": "Stripe Checkout",
-        "2checkout": "2Checkout", "bluepay": "BluePay", "amazon-pay": "Amazon Pay",
-        "apple-pay": "Apple Pay", "google-pay": "Google Pay", "phonepe": "PhonePe",
-        "mobikwik": "Mobikwik", "billdesk": "BillDesk", "atom": "Atom", "bhim": "BHIM",
-        "upi": "UPI", "neteller": "Neteller", "skrill": "Skrill", "payoneer": "Payoneer",
-        "paysera": "Paysera", "sezzle": "Sezzle", "klarna": "Klarna", "afterpay": "Afterpay",
-        "zuora": "Zuora", "xsolla": "Xsolla", "airwalletx": "Airwalletx", "authorize": "Authorize",
-        "bluesnap": "Bluesnap", "checkout": "Checkout", "computop": "Computop", "endurance": "Endurance",
-        "fansly": "Fansly", "mercadopago": "MercadoPago", "ncrsecurepay": "NCR SecurePay",
-        "nordvpn": "NordVPN", "paddle": "Paddle", "patreon": "Patreon", "pay360": "Pay360",
-        "payzen": "PayZen", "processout": "ProcessOut", "securepay": "SecurePay",
-        "squareup": "Squareup", "tebex": "Tebex"
-    }
-
-    CMS_SYSTEMS = ["wordpress", "magento", "prestashop", "bigcommerce", "shopify"]
-    CAPTCHAS = {
-        "recaptcha": "reCAPTCHA", "hcaptcha": "hCAPTCHA",
-        "cloudflare.com/turnstile": "Cloudflare Turnstile", "cloudflare": "Cloudflare"
-    }
-
-    payment_gateways = [name for key, name in PAYMENT_GATEWAYS.items() if key in page_text.lower()]
-    captcha_found = [name for key, name in CAPTCHAS.items() if key in page_text.lower()]
-    cms_found = [cms.title() for cms in CMS_SYSTEMS if cms in page_text.lower()]
-    cloudflare_detected = "cloudflare" in page_text.lower()
-    graphql_used = "Yes" if "graphql" in page_text.lower() else "No"
-    platform_keywords = ['lit', 'gin', 'react', 'angular', 'django', 'flask', 'vue', 'node']
-    platforms = [keyword for keyword in platform_keywords if keyword in page_text.lower()]
-
+        return {"error": f"❌ <b>Error:</b> Could not connect to <code>{url}</code>\n<code>{str(e)}</code>", "url": url}
+        
+    cms_found = [cms.title() for cms in CMS_SYSTEMS if cms in html.lower()]
+    payment_gateways = [name for key, name in PAYMENT_GATEWAYS.items() if key in html.lower()]
+    captcha_found = [name for key, name in CAPTCHAS.items() if key in html.lower()]
+    graphql_used = "Yes" if "graphql" in html.lower() else "No"
+    cloudflare_detected = "cloudflare" in html.lower()
+    platforms = [p.title() for p in PLATFORMS if p in html.lower()]
+    
+    ip, isp, location, flag = get_ip_and_location(domain)
+    registrar, created, expires = get_whois_data(domain)
     try:
-        domain_only = url.replace("https://", "").replace("http://", "")
-        ip_response = requests.post("https://www.nslookup.io/api/v1/records", json={'dnsServer': 'cloudflare', 'domain': domain_only}, timeout=10)
-        ip_data = ip_response.json().get("records", {}).get("a", {}).get("response", {}).get("answer", [{}])[0].get("ipInfo", {})
-    except Exception as e:
-        return {"error": f"❌ <b>DNS Error</b>: Could not resolve IP info for <code>{url}</code>\n<code>{e}</code>", "url": url}
-
-    isp_name = ip_data.get("asname", "N/A")
-    ip_query = ip_data.get("query", "N/A")
-    city = ip_data.get("city", "N/A")
-    region = ip_data.get("regionName", "N/A")
-    country = ip_data.get("country", "N/A")
-    flag = country_name_to_emoji(country)
-    location_output = f"{city}, {region}, {country} {flag}" if country != "N/A" else "N/A"
+        ping_res = icmp_ping(domain, count=2, timeout=2)
+        avg_ping = f"{int(ping_res.avg_rtt)} ms"
+    except:
+        avg_ping = "N/A"
 
     return {
         "info": f"""
-<b>🌐 Website Information 🌐</b>
-🔗 Site URL: <code>{url}</code>
-🔍 HTTP Status: <code>{http_status} {'OK' if http_status == 200 else 'Error'}</code>
-🧱 CMS: <code>{', '.join(cms_found) if cms_found else 'N/A'}</code>
-💳 Payment Gateway: <code>{', '.join(payment_gateways) if payment_gateways else 'None'}</code>
-🔐 Captcha: <code>{', '.join(captcha_found) if captcha_found else 'No Captcha Detected ✅'}</code>
-☁️ Cloudflare: <code>{'Yes ❌' if cloudflare_detected else 'No ✅'}</code>
-🔎 GraphQL: <code>{graphql_used}</code>
-🔧 Platform: <code>{', '.join(platforms) if platforms else 'N/A'}</code>
-🌍 Location: <code>{location_output}</code>
-📧 IP Address: <code>{ip_query}</code>
-📡 ISP: <code>{isp_name}</code>
-⚡ Ping Info: <code>{ping_info}</code>
+<b>🌐 Website Information 🔎</b>
+🔗 <b>URL:</b> <code>{url}</code>
+📶 <b>Status:</b> <code>{status_code} {'OK' if status_code == 200 else 'Error'}</code>
+🧱 <b>CMS:</b> <code>{', '.join(cms_found) if cms_found else 'N/A'}</code>
+💳 <b>Payment:</b> <code>{', '.join(payment_gateways) if payment_gateways else 'None'}</code>
+🔐 <b>Captcha:</b> <code>{', '.join(captcha_found) if captcha_found else 'No Captcha Detected ✅'}</code>
+☁️ <b>Cloudflare:</b> <code>{'Yes ❌' if cloudflare_detected else 'No ✅'}</code>
+🔎 <b>GraphQL:</b> <code>{graphql_used}</code>
+🔧 <b>Platform:</b> <code>{', '.join(platforms) if platforms else 'N/A'}</code>
+🌍 <b>Location:</b> <code>{location} {flag}</code>
+#️⃣ <b>IP:</b> <code>{ip}</code>
+📡 <b>ISP:</b> <code>{isp}</code>
+⚡ <b>Ping:</b> <code>{avg_ping}</code>
+🏢 <b>Registrar:</b> <code>{registrar}</code>
+📅 <b>Created:</b> <code>{created}</code>
+⌛ <b>Expires:</b> <code>{expires}</code>
 """.strip(),
         "url": url
     }
@@ -130,29 +148,13 @@ async def handle_url(client, message):
 
     raw_input = message.text.split(' ', 1)[1]
     raw_urls = [u.strip() for u in re.split(r'[\s,]+', raw_input) if u.strip()]
-    urls = []
-    invalid_urls = []
-
-    for u in raw_urls:
-        test_url = u if is_valid_url(u) else f"https://{u}"
-        if is_valid_url(test_url):
-            urls.append(test_url)
-        else:
-            invalid_urls.append(u)
-
-    if not urls:
-        await message.reply_text("⚠️ No valid URLs provided.", parse_mode=enums.ParseMode.HTML)
-        return
-
-    if invalid_urls:
-        await message.reply_text(f"⚠️ The following URLs are invalid: {', '.join(invalid_urls)}", parse_mode=enums.ParseMode.HTML)
+    urls = [f"https://{u}" if not is_valid_url(u) else u for u in raw_urls]
 
     processing_message = await message.reply_text("🔍 Processing URLs...", reply_to_message_id=message.id)
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(check_website_info, url): url for url in urls}
-        results = [future.result() for future in as_completed(futures)]
-        time.sleep(1)
+        results = [f.result() for f in as_completed(futures)]
 
     await processing_message.delete()
 
@@ -161,48 +163,22 @@ async def handle_url(client, message):
             await message.reply_text(result["error"], parse_mode=enums.ParseMode.HTML)
         else:
             screenshot_url = f"https://image.thum.io/get/width/1000/{result['url']}"
-            buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Open Website", url=result["url"])]])
             await client.send_photo(
                 chat_id=message.chat.id,
                 photo=screenshot_url,
                 caption=result["info"],
                 parse_mode=enums.ParseMode.HTML,
-                reply_markup=buttons
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Open Website", url=result["url"])]]),
             )
 
 @app.on_message(filters.text)
-async def handle_user_input(client, message):
+async def handle_text(client, message):
     user_id = message.from_user.id if message.from_user else message.chat.id
+    if user_id not in pending_users:
+        return
+    pending_users.pop(user_id)
+    urls = [f"https://{u.strip()}" if not u.startswith(('http://', 'https://')) else u.strip() for u in message.text.split()]
+    await handle_url(client, message)
 
-    if user_id in pending_users:
-        pending_users.pop(user_id)
-        raw_urls = [u.strip() for u in re.split(r'[\s,]+', message.text) if u.strip()]
-        urls = []
-        for u in raw_urls:
-            test_url = u if is_valid_url(u) else f"https://{u}"
-            if is_valid_url(test_url):
-                urls.append(test_url)
-
-        if urls:
-            processing_message = await message.reply_text("🔍 Processing URLs...", reply_to_message_id=message.id)
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = {executor.submit(check_website_info, url): url for url in urls}
-                results = [future.result() for future in as_completed(futures)]
-                time.sleep(1)
-            await processing_message.delete()
-            for result in results:
-                if "error" in result:
-                    await message.reply_text(result["error"], parse_mode=enums.ParseMode.HTML)
-                else:
-                    screenshot_url = f"https://image.thum.io/get/width/1000/{result['url']}"
-                    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("Open Website", url=result["url"])]])
-                    await client.send_photo(
-                        chat_id=message.chat.id,
-                        photo=screenshot_url,
-                        caption=result["info"],
-                        parse_mode=enums.ParseMode.HTML,
-                        reply_markup=buttons
-                    )
-
-print("Bot is running...")
+print("🚀 Bot is running...")
 app.run()
