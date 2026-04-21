@@ -5,32 +5,41 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from yt_dlp import YoutubeDL
 
 # Logging
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # Escape MarkdownV2
 def escape_markdown_v2(text):
+    if not text:
+        return ""
     escape_chars = r"\_*[]()~`>#+-=|{}.!'"
-    return "".join(f"\\{char}" if char in escape_chars else char for char in text)
+    return "".join(f"\\{c}" if c in escape_chars else c for c in text)
 
 # Start command
-async def start(update: Update, context: CallbackContext) -> None:
+async def start(update: Update, context: CallbackContext):
     await update.message.reply_text(
-        "Hi! Send me any YouTube video or Shorts link and I will download it for you."
+        "Hi! Send me any YouTube link (Shorts or video) and I will download it for you."
     )
 
 # Download function
 def download_media(url: str):
     ydl_opts = {
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
+        "format": "bv*+ba/best",  # ✅ FIXED STABLE FORMAT
         "outtmpl": "media_%(id)s.%(ext)s",
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "retries": 3,
         "fragment_retries": 3,
-        "cookiefile": "youtube_cookies.txt",  # 👈 YOUR COOKIE FILE
+        "cookiefile": "youtube_cookies.txt",  # ✅ your cookies
         "merge_output_format": "mp4",
+        "postprocessors": [{
+            "key": "FFmpegVideoConvertor",
+            "preferedformat": "mp4",
+        }],
     }
 
     try:
@@ -42,24 +51,26 @@ def download_media(url: str):
         logger.error(f"Download error: {e}")
         return None, None
 
-# Handle messages
-async def handle_message(update: Update, context: CallbackContext) -> None:
-    user_message = update.message.text
+# Handler
+async def handle_message(update: Update, context: CallbackContext):
+    user_message = update.message.text.strip()
     chat_id = update.message.chat_id
     message_id = update.message.message_id
     username = update.message.from_user.username or update.message.from_user.first_name
 
-    # Check YouTube links
-    if ("youtube.com" in user_message or "youtu.be" in user_message) and "https://" in user_message:
+    if ("youtube.com" in user_message or "youtu.be" in user_message) and "http" in user_message:
         downloading_msg = await update.message.reply_text(
-            "<code>Trying to download...</code>", parse_mode="HTML"
+            "<code>Trying to download...</code>",
+            parse_mode="HTML"
         )
+
+        file_path = None
 
         try:
             file_path, info = download_media(user_message)
 
-            if not file_path:
-                raise ValueError("Download failed")
+            if not file_path or not info:
+                raise Exception("Download failed")
 
             title = info.get("title", "YouTube Video")
             thumbnail = info.get("thumbnail")
@@ -72,13 +83,11 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
                 f"📥 *Processed with ❤️*"
             )
 
-            # Inline button
-            keyboard = [
-                [InlineKeyboardButton("🔗 Open Video", url=user_message)]
-            ]
+            # Button
+            keyboard = [[InlineKeyboardButton("🔗 Open Video", url=user_message)]]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            # Send thumbnail first
+            # Thumbnail preview
             if thumbnail:
                 try:
                     await context.bot.send_photo(chat_id=chat_id, photo=thumbnail)
@@ -102,12 +111,17 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
 
         except Exception as e:
             logger.error(f"Handler error: {e}")
+
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ Failed to download video. It may be private, restricted, or invalid.",
+                text="❌ Failed to download video.\nPossible reasons:\n- Private video\n- Age restricted\n- Region blocked\n- Cookies expired",
                 reply_to_message_id=message_id,
             )
-            await context.bot.delete_message(chat_id=chat_id, message_id=downloading_msg.message_id)
+
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=downloading_msg.message_id)
+            except:
+                pass
 
         finally:
             # Delete file
@@ -123,7 +137,7 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
 
 # Main
 if __name__ == "__main__":
-    TOKEN = "YOUR_BOT_TOKEN"
+    TOKEN = "YOUR_NEW_BOT_TOKEN"  # ⚠️ REGENERATE USING BOTFATHER
 
     app = Application.builder().token(TOKEN).build()
 
