@@ -1,6 +1,7 @@
 import logging
 import os
 import subprocess
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext
 from yt_dlp import YoutubeDL
@@ -169,10 +170,26 @@ async def download_and_send(update_or_query, context, url, fmt_key, status_msg):
         for p in [file_path, thumb_path]:
             if os.path.exists(p): os.remove(p)
 
-if __name__ == "__main__":
-    TOKEN = "YOUR_NEW_BOT_TOKEN" 
+async def main():
+    TOKEN = "YOUR_NEW_BOT_TOKEN"
+
     app = Application.builder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(button_callback))
-    app.run_polling()
+
+    await app.initialize()
+    await app.updater.start_polling()
+    await app.start()
+
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+
+if __name__ == "__main__":
+    asyncio.run(main())
